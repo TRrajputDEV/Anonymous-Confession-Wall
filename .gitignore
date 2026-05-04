@@ -1,0 +1,17 @@
+# OS / editor
+.DS_Store
+
+# Node
+**/node_modules
+**/npm-debug.log*
+
+# Vite
+frontend/dist
+
+# Local env (do not commit)
+Backend/.env
+frontend/.env
+.env
+
+# Docker
+**/.env.*

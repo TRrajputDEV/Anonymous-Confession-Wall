@@ -1,0 +1,60 @@
+import express from "express";
+import mongoose from "mongoose";
+import session from "express-session";
+import passport from "passport";
+import cors from "cors";
+import dotenv from "dotenv";
+
+dotenv.config();
+
+import "./config/passport.js";
+
+// Routes
+import authRoutes from "./routes/auth.routes.js";
+import confessionRoutes from "./routes/confession.routes.js";
+import userRoutes from "./routes/user.routes.js";
+const app = express();
+
+const PORT = Number(process.env.PORT) || 8000;
+
+app.use(
+  cors({
+    origin: process.env.CLIENT_URL,
+    credentials: true, // allow cookies from frontend
+  }),
+);
+
+app.use(express.json());
+
+app.use(
+  session({
+    secret: process.env.SESSION_SECRET,
+    resave: false,
+    saveUninitialized: false,
+    cookie: {
+      secure: process.env.NODE_ENV === "production",
+      sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
+      httpOnly: true,
+    },
+  }),
+);
+
+app.use(passport.initialize());
+app.use(passport.session());
+
+app.use("/api/auth", authRoutes);
+app.use("/api/confessions", confessionRoutes);
+app.use("/api/users", userRoutes);
+
+mongoose
+  .connect(process.env.MONGO_URI)
+  .then(() => {
+    console.log("✅ MongoDB connected");
+    app.listen(PORT, () =>
+      console.log(`🚀 Server running → http://localhost:${PORT}`),
+    );
+  })
+  .catch((err) => {
+    console.error("❌ DB connection failed:", err.message);
+    process.exit(1);
+  });

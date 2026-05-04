@@ -1,0 +1,43 @@
+import axios from "axios";
+
+const api = axios.create({
+  // Prefer same-origin requests (works with Vite proxy in dev and nginx proxy in Docker).
+  // Set VITE_API_URL only when you explicitly want a different API host.
+  baseURL: import.meta.env.VITE_API_URL ?? "",
+  withCredentials: true,
+});
+
+// Auth
+export const fetchUser = () => api.get("/api/auth/me");
+export const logoutUser = () => api.post("/api/auth/logout");
+
+// Confessions
+export const getConfessions = (params) =>
+  api.get("/api/confessions", { params });
+export const createConfession = (data) => api.post("/api/confessions", data);
+export const updateConfession = (id, data) =>
+  api.put(`/api/confessions/${id}`, data);
+export const deleteConfession = (id, secretCode) =>
+  api.delete(`/api/confessions/${id}`, { data: { secretCode } });
+export const reactConfession = (id, type) =>
+  api.post(`/api/confessions/${id}/react`, { type });
+
+// Tags
+export const getPredefinedTags = () =>
+  api.get("/api/confessions/tags/predefined");
+
+// User Profile & Personal Logs
+export const getMyProfile = () => api.get("/api/users/me");
+export const getMyConfessions = (params) =>
+  api.get("/api/users/me/confessions", { params });
+// ── COMMENTS / FIELD NOTES ──────────────────────────────
+export const getComments = (confessionId) =>
+  api.get(`/api/confessions/${confessionId}/comments`);
+export const addComment = (confessionId, data) =>
+  api.post(`/api/confessions/${confessionId}/comments`, data);
+
+// NEW: Edit & Delete
+export const updateComment = (confessionId, commentId, data) =>
+  api.put(`/api/confessions/${confessionId}/comments/${commentId}`, data);
+export const deleteComment = (confessionId, commentId) =>
+  api.delete(`/api/confessions/${confessionId}/comments/${commentId}`);
