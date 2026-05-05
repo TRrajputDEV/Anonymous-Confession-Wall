@@ -108,7 +108,7 @@ const CommentModal = ({ confession, onClose }) => {
             ) : (
               <div className="space-y-6">
                 {comments.map((comment) => {
-                  const isOwner = user?.googleId === comment.userId;
+                  const isOwner = (comment?.isOwner ?? (user?.googleId === comment.userId));
                   const isEditing = editingId === comment._id;
 
                   return (

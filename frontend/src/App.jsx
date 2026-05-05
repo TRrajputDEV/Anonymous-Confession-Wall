@@ -2,6 +2,7 @@ import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { AuthProvider, useAuth } from "./context/AuthContext";
 import HomePage from "./pages/HomePage";
 import ProfilePage from "./pages/ProfilePage"; // We will create this next
+import LoginPage from "./pages/LoginPage";
 
 const AppContent = () => {
   const { loading } = useAuth();
@@ -23,6 +24,7 @@ const AppContent = () => {
   return (
     <Routes>
       <Route path="/" element={<HomePage />} />
+      <Route path="/login" element={<LoginPage />} />
       <Route path="/profile" element={<ProfilePage />} />
     </Routes>
   );

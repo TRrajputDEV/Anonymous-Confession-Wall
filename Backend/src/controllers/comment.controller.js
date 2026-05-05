@@ -2,10 +2,22 @@ import Comment from "../models/Comment.model.js";
 import Confession from "../models/confession.model.js";
 import User from "../models/User.model.js";
 
+const shapeComment = (comment, { displayName, isOwner }) => ({
+  _id: comment._id,
+  text: comment.text,
+  createdAt: comment.createdAt,
+  updatedAt: comment.updatedAt,
+  user: {
+    displayName: displayName || "Unknown Agent",
+  },
+  isOwner: Boolean(isOwner),
+});
+
 // ── GET /api/confessions/:id/comments ─────────────────────────
 export const getComments = async (req, res) => {
   try {
     const { id: confessionId } = req.params;
+    const currentUserId = req.user?.googleId;
 
     // Fetch comments for this specific confession, newest first
     const comments = await Comment.find({ confessionId })
@@ -14,10 +26,12 @@ export const getComments = async (req, res) => {
 
     // To make the UI look good, we need the Display Names of the agents who commented.
     // We extract all unique userIds (Google IDs) from the comments:
-    const userIds = [...new Set(comments.map((c) => c.userId))];
+    const userIds = [...new Set(comments.map((c) => c.userId).filter(Boolean))];
     
     // Fetch those specific users
-    const users = await User.find({ googleId: { $in: userIds } }).lean();
+    const users = userIds.length
+      ? await User.find({ googleId: { $in: userIds } }).lean()
+      : [];
     
     // Create a quick lookup map: { "12345": { displayName: "Tushar" } }
     const userMap = users.reduce((acc, user) => {
@@ -26,12 +40,15 @@ export const getComments = async (req, res) => {
     }, {});
 
     // Attach the user data to each comment before sending to the frontend
-    const shapedComments = comments.map((c) => ({
-      ...c,
-      user: {
-        displayName: userMap[c.userId]?.displayName || "Unknown Agent",
-      },
-    }));
+    const shapedComments = comments.map((c) =>
+      shapeComment(c, {
+        displayName:
+          currentUserId && c.userId === currentUserId
+            ? userMap[c.userId]?.displayName
+            : "Agent",
+        isOwner: currentUserId && c.userId === currentUserId,
+      }),
+    );
 
     return res.status(200).json({ comments: shapedComments });
   } catch (err) {
@@ -73,12 +90,10 @@ export const addComment = async (req, res) => {
 
     // Return the newly created comment shaped exactly like the GET route
     return res.status(201).json({
-      comment: {
-        ...comment.toObject(),
-        user: {
-          displayName: user?.displayName || "Agent",
-        },
-      },
+      comment: shapeComment(comment.toObject(), {
+        displayName: user?.displayName || "Agent",
+        isOwner: true,
+      }),
     });
   } catch (err) {
     return res.status(500).json({ message: "Server error.", error: err.message });
@@ -91,7 +106,7 @@ export const addComment = async (req, res) => {
 // ── PUT /api/confessions/:id/comments/:commentId ─────────────────
 export const updateComment = async (req, res) => {
   try {
-    const { commentId } = req.params;
+    const { id: confessionId, commentId } = req.params;
     const { text } = req.body;
     const userId = req.user.googleId;
 
@@ -99,6 +114,10 @@ export const updateComment = async (req, res) => {
 
     const comment = await Comment.findById(commentId);
     if (!comment) return res.status(404).json({ message: "Note not found." });
+
+    if (String(comment.confessionId) !== String(confessionId)) {
+      return res.status(404).json({ message: "Note not found." });
+    }
 
     // Ensure the agent owns this note
     if (comment.userId !== userId) {
@@ -108,7 +127,15 @@ export const updateComment = async (req, res) => {
     comment.text = text.trim();
     await comment.save();
 
-    return res.status(200).json({ message: "Note amended successfully.", comment });
+    const user = await User.findOne({ googleId: userId }).lean();
+
+    return res.status(200).json({
+      message: "Note amended successfully.",
+      comment: shapeComment(comment.toObject(), {
+        displayName: user?.displayName || "Agent",
+        isOwner: true,
+      }),
+    });
   } catch (err) {
     return res.status(500).json({ message: "Server error.", error: err.message });
   }
@@ -122,6 +149,10 @@ export const deleteComment = async (req, res) => {
 
     const comment = await Comment.findById(commentId);
     if (!comment) return res.status(404).json({ message: "Note not found." });
+
+    if (String(comment.confessionId) !== String(confessionId)) {
+      return res.status(404).json({ message: "Note not found." });
+    }
 
     // Ensure the agent owns this note
     if (comment.userId !== userId) {

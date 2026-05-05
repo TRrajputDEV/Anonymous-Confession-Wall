@@ -43,6 +43,7 @@ const ConfessionCard = ({ confession, onUpdated, onDeleted, isAuthenticated, onC
   if (!confession?._id) return null;
 
   const { tilt, theme, tapeStyle, stamp } = getCardPersonality(data._id);
+  const canEdit = Boolean(data?.isOwner);
 
   // ── EXPORT FUNCTIONALITY ──
   const handleExport = async (e) => {
@@ -99,7 +100,7 @@ const ConfessionCard = ({ confession, onUpdated, onDeleted, isAuthenticated, onC
       setIsEditing(false);
       setError("");
       setSecretCode(""); 
-    } catch (err) { setError("Invalid code."); } 
+    } catch { setError("Invalid code."); } 
     finally { setLoading(false); }
   };
 
@@ -111,7 +112,7 @@ const ConfessionCard = ({ confession, onUpdated, onDeleted, isAuthenticated, onC
     try {
       await deleteConfession(data._id, secretCode);
       onDeleted(data._id);
-    } catch (err) { setError("Invalid code."); setLoading(false); }
+    } catch { setError("Invalid code."); setLoading(false); }
   };
 
   return (
@@ -151,7 +152,7 @@ const ConfessionCard = ({ confession, onUpdated, onDeleted, isAuthenticated, onC
           <div className="flex items-center gap-4">
             {data.status === 'draft' && <span className="text-[#ff9900] border border-[#ff9900]/30 px-1.5 py-0.5 text-[8px] font-mono uppercase tracking-widest">Draft</span>}
             <time className="text-[10px] text-[#555] uppercase tracking-[0.1em]">{timeAgo(data.createdAt)}</time>
-            {isAuthenticated && (
+            {canEdit && (
               <button onClick={(e) => { e.stopPropagation(); setIsEditing(!isEditing); setError(""); }} className="text-[#444] hover:text-white transition-colors">
                 {isEditing ? <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M18 6L6 18M6 6l12 12"/></svg> : <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.5"><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/><circle cx="5" cy="12" r="1.5"/></svg>}
               </button>

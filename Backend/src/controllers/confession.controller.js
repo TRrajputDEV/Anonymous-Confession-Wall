@@ -1,11 +1,28 @@
 import bcrypt from "bcryptjs";
 import Confession from "../models/confession.model.js";
 
+const clampInt = (value, { min, max, defaultValue }) => {
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed)) return defaultValue;
+  return Math.min(max, Math.max(min, parsed));
+};
+
+const escapeRegex = (input) =>
+  String(input).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
 // Predefined tags
 const PREDEFINED_TAGS = [
   "relationship", "work", "family", "friendship", "secret",
   "regret", "confession", "advice", "rant", "achievement"
 ];
+
+const PUBLISHED_VISIBILITY_FILTER = {
+  $or: [
+    { status: { $in: ["published", "public"] } },
+    // Backward-compat: older documents may not have a status field
+    { status: { $exists: false } },
+  ],
+};
 
 // ── POST /api/confessions ────────────────────────────────────
 const createConfession = async (req, res) => {
@@ -17,6 +34,14 @@ const createConfession = async (req, res) => {
     }
     if (!secretCode || secretCode.length < 4) {
       return res.status(400).json({ message: "Secret code must be at least 4 characters." });
+    }
+
+    if (!Array.isArray(tags)) {
+      return res.status(400).json({ message: "Tags must be an array." });
+    }
+
+    if (status && !["draft", "published"].includes(status)) {
+      return res.status(400).json({ message: "Invalid status." });
     }
 
     // Normalize tags: lowercase, trim, max 5
@@ -38,9 +63,9 @@ const createConfession = async (req, res) => {
     return res.status(201).json({
       _id: confession._id,
       text: confession.text,
-      userId: confession.userId,
       tags: confession.tags,
       status: confession.status,
+      isOwner: true,
       commentCount: 0,
       viewCount: 0,
       createdAt: confession.createdAt,
@@ -59,24 +84,31 @@ const getAllConfessions = async (req, res) => {
     const userId = req.user?.googleId || null;
     const { tag, search, page = 1, limit = 12 } = req.query;
 
-    const query = { status: "published" };
+    const pageNum = clampInt(page, { min: 1, max: 100000, defaultValue: 1 });
+    const limitNum = clampInt(limit, { min: 1, max: 50, defaultValue: 12 });
+
+    const query = { ...PUBLISHED_VISIBILITY_FILTER };
 
     // Filter by tag
     if (tag) query.tags = tag.toLowerCase();
 
     // Search in text
     if (search) {
-      query.text = { $regex: search, $options: "i" };
+      const term = String(search).trim();
+      if (term.length > 80) {
+        return res.status(400).json({ message: "Search query is too long." });
+      }
+      query.text = { $regex: escapeRegex(term), $options: "i" };
     }
 
-    const skip = (parseInt(page) - 1) * parseInt(limit);
+    const skip = (pageNum - 1) * limitNum;
 
     const [confessions, total] = await Promise.all([
       Confession.find(query)
         .select("-secretCode")
         .sort({ createdAt: -1 })
         .skip(skip)
-        .limit(parseInt(limit)),
+        .limit(limitNum),
       Confession.countDocuments(query),
     ]);
 
@@ -84,12 +116,12 @@ const getAllConfessions = async (req, res) => {
     const shaped = confessions.map((c) => ({
       _id: c._id,
       text: c.text,
-      userId: c.userId,
       tags: c.tags,
       commentCount: c.commentCount,
       viewCount: c.viewCount,
       createdAt: c.createdAt,
       updatedAt: c.updatedAt,
+      isOwner: Boolean(userId && c.userId === userId),
       reactions: {
         like: c.reactions.like.length,
         love: c.reactions.love.length,
@@ -104,9 +136,9 @@ const getAllConfessions = async (req, res) => {
       confessions: shaped,
       pagination: {
         total,
-        page: parseInt(page),
-        limit: parseInt(limit),
-        totalPages: Math.ceil(total / parseInt(limit)),
+        page: pageNum,
+        limit: limitNum,
+        totalPages: Math.ceil(total / limitNum),
       },
     });
   } catch (err) {
@@ -129,6 +161,10 @@ const updateConfession = async (req, res) => {
       return res.status(404).json({ message: "Confession not found." });
     }
 
+    if (confession.userId !== userId) {
+      return res.status(403).json({ message: "Unauthorized." });
+    }
+
     const isMatch = await bcrypt.compare(secretCode, confession.secretCode);
     if (!isMatch) {
       return res.status(403).json({ message: "Incorrect secret code." });
@@ -136,12 +172,20 @@ const updateConfession = async (req, res) => {
 
     if (text?.trim()) confession.text = text.trim();
     if (tags) {
+      if (!Array.isArray(tags)) {
+        return res.status(400).json({ message: "Tags must be an array." });
+      }
       confession.tags = tags
         .map((t) => t.toLowerCase().trim())
         .filter((t) => t.length > 0)
         .slice(0, 5);
     }
-    if (status) confession.status = status;
+    if (status) {
+      if (!["draft", "published"].includes(status)) {
+        return res.status(400).json({ message: "Invalid status." });
+      }
+      confession.status = status;
+    }
 
     await confession.save();
 
@@ -150,9 +194,9 @@ const updateConfession = async (req, res) => {
     return res.status(200).json({
       _id: confession._id,
       text: confession.text,
-      userId: confession.userId,
       tags: confession.tags,
       status: confession.status,
+      isOwner: true,
       commentCount: confession.commentCount,
       viewCount: confession.viewCount,
       createdAt: confession.createdAt,
@@ -175,6 +219,7 @@ const updateConfession = async (req, res) => {
 const deleteConfession = async (req, res) => {
   try {
     const { secretCode } = req.body;
+    const userId = req.user.googleId;
 
     if (!secretCode) {
       return res.status(400).json({ message: "Secret code is required." });
@@ -183,6 +228,10 @@ const deleteConfession = async (req, res) => {
     const confession = await Confession.findById(req.params.id);
     if (!confession) {
       return res.status(404).json({ message: "Confession not found." });
+    }
+
+    if (confession.userId !== userId) {
+      return res.status(403).json({ message: "Unauthorized." });
     }
 
     const isMatch = await bcrypt.compare(secretCode, confession.secretCode);
@@ -242,7 +291,8 @@ const reactToConfession = async (req, res) => {
       userReactions,
       tags: confession.tags,
       commentCount: confession.commentCount,
-      userId: confession.userId,
+      status: confession.status,
+      isOwner: confession.userId === userId,
       createdAt: confession.createdAt,
       updatedAt: confession.updatedAt,
     });

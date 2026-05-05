@@ -1,6 +1,20 @@
 import User from "../models/User.model.js";
 import Confession from "../models/confession.model.js";
 
+const PUBLISHED_VISIBILITY_FILTER = {
+  $or: [
+    { status: { $in: ["published", "public"] } },
+    // Backward-compat: older documents may not have a status field
+    { status: { $exists: false } },
+  ],
+};
+
+const clampInt = (value, { min, max, defaultValue }) => {
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed)) return defaultValue;
+  return Math.min(max, Math.max(min, parsed));
+};
+
 // GET /api/users/me — get current user profile with stats
 const getMyProfile = async (req, res) => {
   try {
@@ -19,7 +33,7 @@ const getMyProfile = async (req, res) => {
 
     // Get user stats
     const [publishedCount, draftCount] = await Promise.all([
-      Confession.countDocuments({ userId, status: "published" }),
+      Confession.countDocuments({ userId, ...PUBLISHED_VISIBILITY_FILTER }),
       Confession.countDocuments({ userId, status: "draft" }),
     ]);
 
@@ -48,11 +62,19 @@ const updateMyProfile = async (req, res) => {
     const userId = req.user.googleId;
     const { bio } = req.body;
 
-    const user = await User.findOneAndUpdate(
-      { googleId: userId },
-      { bio: bio?.trim() || "" },
-      { new: true, upsert: true }
-    );
+    let user = await User.findOne({ googleId: userId });
+    if (!user) {
+      user = await User.create({
+        googleId: userId,
+        email: req.user.email,
+        displayName: req.user.displayName,
+        avatar: req.user.avatar,
+        bio: bio?.trim() || "",
+      });
+    } else {
+      user.bio = bio?.trim() || "";
+      await user.save();
+    }
 
     return res.json({
       googleId: user.googleId,
@@ -71,17 +93,30 @@ const getMyConfessions = async (req, res) => {
     const userId = req.user.googleId;
     const { status, page = 1, limit = 12 } = req.query;
 
-    const query = { userId };
-    if (status) query.status = status;
+    const pageNum = clampInt(page, { min: 1, max: 100000, defaultValue: 1 });
+    const limitNum = clampInt(limit, { min: 1, max: 50, defaultValue: 12 });
 
-    const skip = (parseInt(page) - 1) * parseInt(limit);
+    const query = { userId };
+    if (status) {
+        if (!["draft", "published"].includes(status)) {
+        return res.status(400).json({ message: "Invalid status." });
+      }
+
+      if (status === "draft") {
+        query.status = "draft";
+      } else {
+        Object.assign(query, PUBLISHED_VISIBILITY_FILTER);
+      }
+    }
+
+    const skip = (pageNum - 1) * limitNum;
 
     const [confessions, total] = await Promise.all([
       Confession.find(query)
         .select("-secretCode")
         .sort({ createdAt: -1 })
         .skip(skip)
-        .limit(parseInt(limit)),
+        .limit(limitNum),
       Confession.countDocuments(query),
     ]);
 
@@ -89,13 +124,13 @@ const getMyConfessions = async (req, res) => {
     const shaped = confessions.map((c) => ({
       _id: c._id,
       text: c.text,
-      userId: c.userId,
       tags: c.tags,
       status: c.status,
       commentCount: c.commentCount,
       viewCount: c.viewCount,
       createdAt: c.createdAt,
       updatedAt: c.updatedAt,
+      isOwner: true,
       reactions: {
         like: c.reactions.like.length,
         love: c.reactions.love.length,
@@ -108,9 +143,9 @@ const getMyConfessions = async (req, res) => {
       confessions: shaped,
       pagination: {
         total,
-        page: parseInt(page),
-        limit: parseInt(limit),
-        totalPages: Math.ceil(total / parseInt(limit)),
+        page: pageNum,
+        limit: limitNum,
+        totalPages: Math.ceil(total / limitNum),
       },
     });
   } catch (err) {

@@ -1,6 +1,7 @@
 import passport from "passport";
 import { Strategy as GoogleStrategy } from "passport-google-oauth20";
 import dotenv from "dotenv";
+import User from "../models/User.model.js";
 
 dotenv.config();
 
@@ -11,14 +12,23 @@ const isGoogleOAuthConfigured =
 
 // Save minimal user info into session
 passport.serializeUser((user, done) => {
-  console.log("Serializing user:", user);
-  done(null, user);
+  done(null, user.googleId);
 });
 
 // Read user back from session
-passport.deserializeUser((user, done) => {
-  console.log("Deserializing user:", user);
-  done(null, user);
+passport.deserializeUser(async (googleId, done) => {
+  try {
+    const user = await User.findOne({ googleId }).lean();
+    if (!user) return done(null, false);
+    return done(null, {
+      googleId: user.googleId,
+      email: user.email,
+      displayName: user.displayName,
+      avatar: user.avatar,
+    });
+  } catch (err) {
+    return done(err);
+  }
 });
 
 if (isGoogleOAuthConfigured) {
@@ -29,18 +39,44 @@ if (isGoogleOAuthConfigured) {
         clientSecret: process.env.GOOGLE_CLIENT_SECRET,
         callbackURL: process.env.GOOGLE_CALLBACK_URL,
       },
-      (accessToken, refreshToken, profile, done) => {
-        console.log("Google profile received:", profile);
-        // We only keep what we need — no DB User model needed
-        const user = {
-          googleId: profile.id,
-          displayName: profile.displayName,
-          email: profile.emails[0].value,
-          avatar: profile.photos[0].value,
-        };
-        console.log("User object created:", user);
-        return done(null, user);
-      }
+      async (accessToken, refreshToken, profile, done) => {
+        try {
+          const googleId = profile.id;
+          const email = profile.emails?.[0]?.value;
+          const displayName = profile.displayName;
+          const avatar = profile.photos?.[0]?.value;
+
+          if (!googleId || !email || !displayName) {
+            return done(new Error("Google profile is missing required fields."));
+          }
+
+          const user = await User.findOneAndUpdate(
+            { googleId },
+            {
+              $set: {
+                email,
+                displayName,
+                avatar,
+              },
+            },
+            {
+              new: true,
+              upsert: true,
+              runValidators: true,
+              setDefaultsOnInsert: true,
+            },
+          ).lean();
+
+          return done(null, {
+            googleId: user.googleId,
+            email: user.email,
+            displayName: user.displayName,
+            avatar: user.avatar,
+          });
+        } catch (err) {
+          return done(err);
+        }
+      },
     )
   );
 } else {

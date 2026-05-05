@@ -2,14 +2,14 @@ import { useEffect } from "react";
 import ConfessionForm from "./ConfessionForm";
 
 const ConfessionModal = ({ isOpen, onClose, onCreated }) => {
-  if (!isOpen) return null;
-
-  // Close on Escape key
   useEffect(() => {
+    if (!isOpen) return;
     const handleEsc = (e) => e.key === "Escape" && onClose();
     window.addEventListener("keydown", handleEsc);
     return () => window.removeEventListener("keydown", handleEsc);
-  }, [onClose]);
+  }, [isOpen, onClose]);
+
+  if (!isOpen) return null;
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 sm:p-6">

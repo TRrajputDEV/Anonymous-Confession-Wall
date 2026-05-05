@@ -10,7 +10,20 @@ const getMe = (req, res) => {
 const logout = (req, res, next) => {
   req.logout((err) => {
     if (err) return next(err);
-    res.status(200).json({ message: "Logged out successfully." });
+
+    // Destroy session (server-side) and clear cookie (client-side)
+    const cookieName = process.env.SESSION_COOKIE_NAME || "sid";
+
+    if (!req.session) {
+      res.clearCookie(cookieName, { path: "/" });
+      return res.status(200).json({ message: "Logged out successfully." });
+    }
+
+    req.session.destroy((destroyErr) => {
+      if (destroyErr) return next(destroyErr);
+      res.clearCookie(cookieName, { path: "/" });
+      return res.status(200).json({ message: "Logged out successfully." });
+    });
   });
 };
 

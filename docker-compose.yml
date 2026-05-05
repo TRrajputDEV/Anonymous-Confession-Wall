@@ -19,6 +19,8 @@ services:
       # App
       PORT: "8000"
       NODE_ENV: ${NODE_ENV:-development}
+      # NOTE: MONGO_URI is intentionally sourced from Backend/.env so
+      # docker-compose matches your local backend config (Atlas or local).
 
   frontend:
     build:
