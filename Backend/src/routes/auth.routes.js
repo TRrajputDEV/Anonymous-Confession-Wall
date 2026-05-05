@@ -33,12 +33,16 @@ router.get("/google/callback", (req, res, next) => {
     });
   }
 
-  return passport.authenticate("google", {
+  passport.authenticate("google", {
     failureRedirect: `${process.env.CLIENT_URL}/login`,
+    session: true,
   })(req, res, (err) => {
     if (err) return next(err);
-    // On success redirect to frontend home
-    res.redirect(process.env.CLIENT_URL);
+
+    // 🔥 THIS LINE FIXES YOUR ENTIRE BUG
+    req.session.save(() => {
+      res.redirect(process.env.CLIENT_URL);
+    });
   });
 });
 
