@@ -6,12 +6,11 @@ const getMe = (req, res) => {
   return res.status(401).json({ user: null });
 };
 
-// POST /api/auth/logout  — destroy session
+// POST /api/auth/logout  — destroy session and clear cookie
 const logout = (req, res, next) => {
   req.logout((err) => {
     if (err) return next(err);
 
-    // Destroy session (server-side) and clear cookie (client-side)
     const cookieName = process.env.SESSION_COOKIE_NAME || "sid";
 
     if (!req.session) {

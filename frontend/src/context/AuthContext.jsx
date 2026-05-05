@@ -4,10 +4,10 @@ import { fetchUser, logoutUser } from "../api/api";
 const AuthContext = createContext(null);
 
 export const AuthProvider = ({ children }) => {
-  const [user, setUser]       = useState(null);
+  const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
 
-  // On app load — check if user is already logged in (session exists)
+  // On app load — check if user is already logged in (session cookie exists)
   useEffect(() => {
     fetchUser()
       .then((res) => setUser(res.data.user))
@@ -27,6 +27,5 @@ export const AuthProvider = ({ children }) => {
   );
 };
 
-// Custom hook for easy access
 // eslint-disable-next-line react-refresh/only-export-components
 export const useAuth = () => useContext(AuthContext);

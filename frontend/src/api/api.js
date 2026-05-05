@@ -1,10 +1,16 @@
 import axios from "axios";
 
+// In production on Render, VITE_API_URL MUST be set to the backend URL
+// (e.g. https://anonymous-confession-wall-7x6t.onrender.com) because the
+// frontend and backend are on different domains.
+//
+// Leaving it empty only works when a reverse proxy (nginx/Vite dev server)
+// forwards /api to the backend on the same origin — which is NOT the case
+// on Render where frontend and backend are separate services.
+//
 const api = axios.create({
-  // Prefer same-origin requests (works with Vite proxy in dev and nginx proxy in Docker).
-  // Set VITE_API_URL only when you explicitly want a different API host.
   baseURL: import.meta.env.VITE_API_URL ?? "",
-  withCredentials: true,
+  withCredentials: true, // send session cookie on every request
 });
 
 // Auth
@@ -30,13 +36,12 @@ export const getPredefinedTags = () =>
 export const getMyProfile = () => api.get("/api/users/me");
 export const getMyConfessions = (params) =>
   api.get("/api/users/me/confessions", { params });
-// ── COMMENTS / FIELD NOTES ──────────────────────────────
+
+// Comments
 export const getComments = (confessionId) =>
   api.get(`/api/confessions/${confessionId}/comments`);
 export const addComment = (confessionId, data) =>
   api.post(`/api/confessions/${confessionId}/comments`, data);
-
-// NEW: Edit & Delete
 export const updateComment = (confessionId, commentId, data) =>
   api.put(`/api/confessions/${confessionId}/comments/${commentId}`, data);
 export const deleteComment = (confessionId, commentId) =>

@@ -2,7 +2,6 @@ import passport from "passport";
 import { Strategy as GoogleStrategy } from "passport-google-oauth20";
 import dotenv from "dotenv";
 import User from "../models/User.model.js";
-
 dotenv.config();
 
 const isGoogleOAuthConfigured =
@@ -10,12 +9,12 @@ const isGoogleOAuthConfigured =
   Boolean(process.env.GOOGLE_CLIENT_SECRET) &&
   Boolean(process.env.GOOGLE_CALLBACK_URL);
 
-// Save minimal user info into session
+// Save minimal user info into session (only googleId stored in session store)
 passport.serializeUser((user, done) => {
   done(null, user.googleId);
 });
 
-// Read user back from session
+// Rehydrate user from googleId on every request
 passport.deserializeUser(async (googleId, done) => {
   try {
     const user = await User.findOne({ googleId }).lean();
@@ -47,18 +46,14 @@ if (isGoogleOAuthConfigured) {
           const avatar = profile.photos?.[0]?.value;
 
           if (!googleId || !email || !displayName) {
-            return done(new Error("Google profile is missing required fields."));
+            return done(
+              new Error("Google profile is missing required fields."),
+            );
           }
 
           const user = await User.findOneAndUpdate(
             { googleId },
-            {
-              $set: {
-                email,
-                displayName,
-                avatar,
-              },
-            },
+            { $set: { email, displayName, avatar } },
             {
               new: true,
               upsert: true,
@@ -77,7 +72,7 @@ if (isGoogleOAuthConfigured) {
           return done(err);
         }
       },
-    )
+    ),
   );
 } else {
   console.warn(
