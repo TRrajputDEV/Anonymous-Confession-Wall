@@ -28,25 +28,23 @@ router.get("/google", (req, res, next) => {
 // Step 2: Google redirects back here after login.
 //
 // WHY NOT res.redirect() (302):
-//   Render's reverse proxy — and Cloudflare if present — process the Location
-//   header and follow the redirect BEFORE the browser can store the Set-Cookie
-//   from this response. Cookie is silently lost. Session never established.
+//   Render's reverse proxy and Cloudflare process the Location header and
+//   follow the redirect BEFORE the browser stores Set-Cookie. Cookie lost.
 //
-// THE FIX — return a 200 HTML page instead:
-//   The browser fully processes the 200 response (stores Set-Cookie), THEN
-//   the inline script runs window.location.replace(). Cookie is committed
-//   before the frontend loads and calls /api/auth/me.
+// THE FIX — 200 HTML page:
+//   Browser fully processes the 200 (stores Set-Cookie), THEN the nonced
+//   script runs window.location.replace(). Cookie exists before /api/auth/me.
 //
-// WHY Cache-Control: no-store:
-//   Cloudflare (and other CDNs) strip Set-Cookie from any response they cache.
-//   no-store tells Cloudflare never to cache this response, so Set-Cookie
-//   is passed through to the browser intact.
+// WHY Cache-Control: no-store + Vary: *:
+//   Cloudflare strips Set-Cookie from cached responses.
+//   no-store prevents caching. Vary: * makes every response unique so no
+//   intermediate cache (browser, CDN, proxy) serves a stale copy.
+//   Without this the browser serves the callback from cache (304) and the
+//   new nonce never matches — script is blocked and cookie is never set.
 //
 // WHY a CSP nonce:
-//   helmet sets Content-Security-Policy: script-src 'self' on all responses,
-//   which blocks inline <script> tags. We generate a per-request nonce and
-//   override the CSP just for this one response so the redirect script is
-//   allowed, while every other route keeps the strict default.
+//   helmet blocks inline <script> by default (script-src 'self').
+//   A per-request nonce overrides that for this one response only.
 //
 router.get("/google/callback", (req, res, next) => {
   if (!isGoogleOAuthConfigured) {
@@ -70,22 +68,33 @@ router.get("/google/callback", (req, res, next) => {
         );
       }
 
-      // Sanitize CLIENT_URL — strip characters that could break HTML/JS context
+      // Sanitize CLIENT_URL
       const clientUrl = String(process.env.CLIENT_URL).replace(/['"<>]/g, "");
 
-      // Per-request nonce — allows this one inline script past helmet's CSP
+      // Per-request nonce for CSP
       const nonce = crypto.randomBytes(16).toString("base64");
 
-      // Cache-Control: no-store is the Cloudflare fix.
-      // Cloudflare strips Set-Cookie from cached responses. no-store prevents
-      // caching entirely, so Set-Cookie reaches the browser untouched.
+      // ALL of these headers must be set together:
+      //
+      // Cache-Control: no-store      → don't cache at all (Cloudflare, nginx, browser)
+      // Pragma: no-cache             → HTTP/1.0 proxies
+      // Surrogate-Control: no-store  → Cloudflare/Fastly surrogate cache
+      // Vary: *                      → marks every response as unique; no cache
+      //                                will serve a stored copy for any request
+      // Expires: 0                   → legacy cache busting
+      //
+      // Without Vary: * the browser sends a conditional GET (If-None-Match)
+      // and gets back 304 Not Modified — serving the OLD cached HTML with the
+      // OLD nonce. The new nonce in the CSP header doesn't match → script blocked
+      // → window.location.replace never runs → user stuck.
+      //
       res.set({
         "Cache-Control":     "no-store, no-cache, must-revalidate, proxy-revalidate",
         "Pragma":            "no-cache",
+        "Expires":           "0",
         "Surrogate-Control": "no-store",
+        "Vary":              "*",
         "Referrer-Policy":   "no-referrer",
-        // Override helmet's strict CSP for this response only.
-        // Nonce ties the permission to exactly this script tag.
         "Content-Security-Policy":
           `default-src 'none'; script-src 'nonce-${nonce}'; style-src 'unsafe-inline'`,
       });
