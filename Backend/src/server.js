@@ -52,7 +52,7 @@ if (cookieSameSite === "none" && !isProd) {
 
 // Required when running behind a reverse proxy (nginx, load balancer) so
 // secure cookies and req.secure work correctly.
-app.set("trust proxy", true);
+app.set("trust proxy", 1);
 app.disable("x-powered-by");
 
 app.use(
