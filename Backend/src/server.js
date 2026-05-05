@@ -52,7 +52,7 @@ if (cookieSameSite === "none" && !isProd) {
 
 // Required when running behind a reverse proxy (nginx, load balancer) so
 // secure cookies and req.secure work correctly.
-app.set("trust proxy", 1);
+app.set("trust proxy", true);
 app.disable("x-powered-by");
 
 app.use(
@@ -91,15 +91,15 @@ app.use(
     secret: process.env.SESSION_SECRET,
     resave: false,
     saveUninitialized: false,
-    proxy: isProd,
+    proxy: true,
     store: MongoStore.create({
       mongoUrl: process.env.MONGO_URI,
       collectionName: "sessions",
       ttl: 14 * 24 * 60 * 60,
     }),
     cookie: {
-      secure: isProd,
-      sameSite: cookieSameSite,
+      secure: true,
+      sameSite: "none",
       httpOnly: true,
       maxAge: 14 * 24 * 60 * 60 * 1000,
     },
