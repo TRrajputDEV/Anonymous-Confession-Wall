@@ -1,3 +1,4 @@
+import crypto from "crypto";
 import express from "express";
 import passport from "passport";
 import { getMe, logout } from "../controllers/auth.controller.js";
@@ -26,19 +27,26 @@ router.get("/google", (req, res, next) => {
 
 // Step 2: Google redirects back here after login.
 //
-// THE FIX: Instead of res.redirect() (302), we return a 200 HTML page that
-// redirects via <meta http-equiv="refresh">. This is critical because:
+// WHY NOT res.redirect() (302):
+//   Render's reverse proxy — and Cloudflare if present — process the Location
+//   header and follow the redirect BEFORE the browser can store the Set-Cookie
+//   from this response. Cookie is silently lost. Session never established.
 //
-//   - On a 302 redirect, Render's reverse proxy processes the redirect BEFORE
-//     the browser can store the Set-Cookie header. Cookie is silently lost.
+// THE FIX — return a 200 HTML page instead:
+//   The browser fully processes the 200 response (stores Set-Cookie), THEN
+//   the inline script runs window.location.replace(). Cookie is committed
+//   before the frontend loads and calls /api/auth/me.
 //
-//   - On a 200 response, the browser fully processes the response — storing
-//     the Set-Cookie — before following the meta-refresh. Cookie exists by the
-//     time the frontend loads and calls /api/auth/me.
+// WHY Cache-Control: no-store:
+//   Cloudflare (and other CDNs) strip Set-Cookie from any response they cache.
+//   no-store tells Cloudflare never to cache this response, so Set-Cookie
+//   is passed through to the browser intact.
 //
-//   - We use <meta refresh> instead of an inline <script> because helmet's
-//     Content-Security-Policy blocks inline scripts by default (script-src 'self').
-//     Meta refresh is an HTML navigation, not a script — CSP does not block it.
+// WHY a CSP nonce:
+//   helmet sets Content-Security-Policy: script-src 'self' on all responses,
+//   which blocks inline <script> tags. We generate a per-request nonce and
+//   override the CSP just for this one response so the redirect script is
+//   allowed, while every other route keeps the strict default.
 //
 router.get("/google/callback", (req, res, next) => {
   if (!isGoogleOAuthConfigured) {
@@ -56,29 +64,39 @@ router.get("/google/callback", (req, res, next) => {
 
     req.session.save((saveErr) => {
       if (saveErr) {
-        console.error("❌ Session save error after OAuth:", saveErr);
+        console.error("Session save error after OAuth:", saveErr);
         return res.redirect(
           `${process.env.CLIENT_URL}/login?error=session_failed`,
         );
       }
 
-      // Sanitize CLIENT_URL — strip quotes to prevent header injection
-      const clientUrl = String(process.env.CLIENT_URL)
-        .replace(/"/g, "")
-        .replace(/'/g, "")
-        .replace(/</g, "")
-        .replace(/>/g, "");
+      // Sanitize CLIENT_URL — strip characters that could break HTML/JS context
+      const clientUrl = String(process.env.CLIENT_URL).replace(/['"<>]/g, "");
 
-      // 200 response — browser stores the Set-Cookie header here.
-      // meta refresh triggers AFTER the response is fully processed.
-      // No inline <script> = no CSP violation from helmet.
+      // Per-request nonce — allows this one inline script past helmet's CSP
+      const nonce = crypto.randomBytes(16).toString("base64");
+
+      // Cache-Control: no-store is the Cloudflare fix.
+      // Cloudflare strips Set-Cookie from cached responses. no-store prevents
+      // caching entirely, so Set-Cookie reaches the browser untouched.
+      res.set({
+        "Cache-Control":     "no-store, no-cache, must-revalidate, proxy-revalidate",
+        "Pragma":            "no-cache",
+        "Surrogate-Control": "no-store",
+        "Referrer-Policy":   "no-referrer",
+        // Override helmet's strict CSP for this response only.
+        // Nonce ties the permission to exactly this script tag.
+        "Content-Security-Policy":
+          `default-src 'none'; script-src 'nonce-${nonce}'; style-src 'unsafe-inline'`,
+      });
+
       res.status(200).send(`<!DOCTYPE html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta http-equiv="refresh" content="0; url=${clientUrl}" />
-    <title>Logging in…</title>
+    <title>Logging in...</title>
     <style>
+      *, *::before, *::after { box-sizing: border-box; }
       body {
         margin: 0;
         background: #0d0d0d;
@@ -90,15 +108,15 @@ router.get("/google/callback", (req, res, next) => {
         min-height: 100vh;
         font-family: sans-serif;
         font-size: 13px;
+        gap: 16px;
       }
       .spinner {
         width: 28px;
         height: 28px;
-        border: 2px solid rgba(255,255,255,0.08);
+        border: 2px solid rgba(255, 255, 255, 0.08);
         border-top-color: #ff3c3c;
         border-radius: 50%;
         animation: spin 0.7s linear infinite;
-        margin-bottom: 16px;
       }
       @keyframes spin { to { transform: rotate(360deg); } }
       a { color: #ff3c3c; }
@@ -106,10 +124,13 @@ router.get("/google/callback", (req, res, next) => {
   </head>
   <body>
     <div class="spinner"></div>
-    Redirecting…
+    <span>Logging in...</span>
     <noscript>
-      <p>Click <a href="${clientUrl}">here</a> if not redirected.</p>
+      <p>Click <a href="${clientUrl}">here</a> to continue.</p>
     </noscript>
+    <script nonce="${nonce}">
+      window.location.replace("${clientUrl}");
+    </script>
   </body>
 </html>`);
     });
