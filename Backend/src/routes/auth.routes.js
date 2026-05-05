@@ -18,33 +18,26 @@ router.get("/google", (req, res, next) => {
         "Google OAuth is not configured on the server. Set GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, and GOOGLE_CALLBACK_URL.",
     });
   }
-  return passport.authenticate("google", { scope: ["profile", "email"] })(
-    req,
-    res,
-    next,
-  );
+  return passport.authenticate("google", {
+    scope: ["profile", "email"],
+    // Force account selection every time so Google always issues a fresh code.
+    // This prevents stale/replayed codes from a previous session.
+    prompt: "select_account",
+  })(req, res, next);
 });
 
 // Step 2: Google redirects back here after login.
 //
-// WHY NOT res.redirect() (302):
-//   Render's reverse proxy and Cloudflare process the Location header and
-//   follow the redirect BEFORE the browser stores Set-Cookie. Cookie lost.
+// ROOT CAUSE: Render free tier spins down after inactivity. When the OAuth
+// callback arrives, the server may still be booting. Render's infrastructure
+// can hit the callback URL twice (once during boot probe, once from browser).
+// Google's auth code is ONE-TIME USE — the first hit consumes it, the second
+// gets `invalid_grant`. Passport then fails silently: req.user never set,
+// no session written, no Set-Cookie sent.
 //
-// THE FIX — 200 HTML page:
-//   Browser fully processes the 200 (stores Set-Cookie), THEN the nonced
-//   script runs window.location.replace(). Cookie exists before /api/auth/me.
-//
-// WHY Cache-Control: no-store + Vary: *:
-//   Cloudflare strips Set-Cookie from cached responses.
-//   no-store prevents caching. Vary: * makes every response unique so no
-//   intermediate cache (browser, CDN, proxy) serves a stale copy.
-//   Without this the browser serves the callback from cache (304) and the
-//   new nonce never matches — script is blocked and cookie is never set.
-//
-// WHY a CSP nonce:
-//   helmet blocks inline <script> by default (script-src 'self').
-//   A per-request nonce overrides that for this one response only.
+// FIX: Wrap passport.authenticate in a custom callback so we can intercept
+// the `invalid_grant` TokenError explicitly and redirect to a user-friendly
+// error page instead of returning a 500 or blank response.
 //
 router.get("/google/callback", (req, res, next) => {
   if (!isGoogleOAuthConfigured) {
@@ -54,40 +47,59 @@ router.get("/google/callback", (req, res, next) => {
     });
   }
 
-  passport.authenticate("google", {
-    failureRedirect: `${process.env.CLIENT_URL}/login?error=oauth_failed`,
-    session: true,
-  })(req, res, (err) => {
-    if (err) return next(err);
+  // Use a custom callback instead of { failureRedirect } so we can inspect
+  // the exact error type before deciding what to do.
+  passport.authenticate("google", { session: true })(req, res, (err) => {
 
-    req.session.save((saveErr) => {
-      if (saveErr) {
-        console.error("Session save error after OAuth:", saveErr);
+    // Handle invalid_grant specifically — this is the cold-start race condition.
+    // Redirect the user back to login with a clear message so they can retry.
+    // A fresh click generates a new code and the server is now warm.
+    if (err) {
+      const isInvalidGrant =
+        err.code === "invalid_grant" ||
+        (err.message && err.message.toLowerCase().includes("bad request"));
+
+      if (isInvalidGrant) {
+        console.warn(
+          "[OAuth] invalid_grant — auth code already used or server was cold. " +
+          "Redirecting user to retry login."
+        );
         return res.redirect(
-          `${process.env.CLIENT_URL}/login?error=session_failed`,
+          `${process.env.CLIENT_URL}/login?error=please_retry`
         );
       }
 
-      // Sanitize CLIENT_URL
-      const clientUrl = String(process.env.CLIENT_URL).replace(/['"<>]/g, "");
+      console.error("[OAuth] passport.authenticate error:", err);
+      return next(err);
+    }
 
-      // Per-request nonce for CSP
+    // If passport succeeded but req.user is still missing, something is wrong
+    // with deserialization or the DB lookup — log it and redirect cleanly.
+    if (!req.user) {
+      console.error(
+        "[OAuth] No user on req after successful authenticate. " +
+        "Check passport.deserializeUser and MongoDB connection."
+      );
+      return res.redirect(
+        `${process.env.CLIENT_URL}/login?error=oauth_failed`
+      );
+    }
+
+    console.log("[OAuth] Authenticated user:", req.user.email);
+
+    req.session.save((saveErr) => {
+      if (saveErr) {
+        console.error("[OAuth] Session save failed:", saveErr);
+        return res.redirect(
+          `${process.env.CLIENT_URL}/login?error=session_failed`
+        );
+      }
+
+      console.log("[OAuth] Session saved. ID:", req.session.id);
+
+      const clientUrl = String(process.env.CLIENT_URL).replace(/['"<>]/g, "");
       const nonce = crypto.randomBytes(16).toString("base64");
 
-      // ALL of these headers must be set together:
-      //
-      // Cache-Control: no-store      → don't cache at all (Cloudflare, nginx, browser)
-      // Pragma: no-cache             → HTTP/1.0 proxies
-      // Surrogate-Control: no-store  → Cloudflare/Fastly surrogate cache
-      // Vary: *                      → marks every response as unique; no cache
-      //                                will serve a stored copy for any request
-      // Expires: 0                   → legacy cache busting
-      //
-      // Without Vary: * the browser sends a conditional GET (If-None-Match)
-      // and gets back 304 Not Modified — serving the OLD cached HTML with the
-      // OLD nonce. The new nonce in the CSP header doesn't match → script blocked
-      // → window.location.replace never runs → user stuck.
-      //
       res.set({
         "Cache-Control":     "no-store, no-cache, must-revalidate, proxy-revalidate",
         "Pragma":            "no-cache",
@@ -146,10 +158,17 @@ router.get("/google/callback", (req, res, next) => {
   });
 });
 
-// Get currently logged-in user (used by frontend on load)
-router.get("/me", getMe);
+// Diagnostic — remove after confirming login works
+router.get("/session-debug", (req, res) => {
+  res.json({
+    sessionID:       req.sessionID ?? null,
+    isAuthenticated: req.isAuthenticated(),
+    user:            req.user ?? null,
+    cookie:          req.session?.cookie ?? null,
+  });
+});
 
-// Logout and clear session
+router.get("/me", getMe);
 router.post("/logout", logout);
 
 export default router;
