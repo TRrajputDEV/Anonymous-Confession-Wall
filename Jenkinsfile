@@ -11,19 +11,19 @@ pipeline {
 
         stage('Stop Existing Containers') {
             steps {
-                sh 'docker compose down || true'
+                sh 'docker compose -p anonymous-confession-wall down'
             }
         }
 
         stage('Build & Deploy') {
             steps { 
-                sh 'docker compose up -d --build'
+                sh 'docker compose -p anonymous-confession-wall up -d --build'
             }
         }
 
         stage('Verify Deployment') {
             steps {
-                sh 'docker compose ps'
+                sh 'docker compose -p anonymous-confession-wall ps'
             }
         }
     }
